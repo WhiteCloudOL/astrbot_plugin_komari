@@ -30,9 +30,7 @@ class KomariPlugin(Star):
             api_token=str(config.get("api_token", "")),
             cache_ttl=int(config.get("cache_ttl", 30)),
         )
-        self.renderer = StatusRenderer(
-            self.plugin_data_dir / "assets" / "komari_status.png"
-        )
+        self.renderer = StatusRenderer(self.plugin_data_dir / "komari_status.png")
         self._monitor_task: asyncio.Task[None] | None = None
         self._state = self._load_state()
         self._baseline_ready = bool(self._state.get("baseline_ready", False))
