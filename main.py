@@ -52,7 +52,7 @@ class KomariPlugin(Star):
                 pass
             self._monitor_task = None
 
-    @filter.command("komari", alias={"komari状态"})
+    @filter.command("komari")
     async def show_status(self, event: AstrMessageEvent):
         """Render and return the current Komari status image."""
         snapshot = await self._fetch_snapshot()
@@ -61,32 +61,6 @@ class KomariPlugin(Star):
             return
         image_path = await asyncio.to_thread(self._render_snapshot, snapshot)
         yield event.image_result(image_path)
-
-    @filter.command("komari刷新")
-    async def refresh_status(self, event: AstrMessageEvent):
-        """Refresh Komari data and return a newly rendered image."""
-        snapshot = await self._fetch_snapshot(force=True)
-        if snapshot is None:
-            yield event.plain_result(
-                "Komari 请求失败，请检查站点地址、Token 和网络连接。"
-            )
-            return
-        image_path = await asyncio.to_thread(self._render_snapshot, snapshot)
-        yield event.image_result(image_path)
-
-    @filter.command("komari指令", alias={"komari帮助"})
-    async def show_help(self, event: AstrMessageEvent):
-        """List the available Komari commands and monitor configuration."""
-        targets = "、".join(self.targets) if self.targets else "未配置"
-        yield event.plain_result(
-            "Komari 监控指令\n"
-            "• /komari 或 /komari状态：查询节点状态图片\n"
-            "• /komari刷新：跳过缓存并刷新状态图片\n"
-            "• /komari指令：查看本帮助\n\n"
-            f"监控地址：{self.base_url or '未配置'}\n"
-            f"提醒会话：{targets}\n"
-            f"轮询间隔：{self.poll_interval} 秒"
-        )
 
     async def _monitor_loop(self) -> None:
         """Poll Komari and send one notification per state transition."""
