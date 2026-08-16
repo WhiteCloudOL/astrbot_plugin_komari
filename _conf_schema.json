@@ -1,0 +1,35 @@
+{
+  "base_url": {
+    "type": "string",
+    "description": "Komari 站点地址（不带末尾斜杠）",
+    "default": ""
+  },
+  "api_token": {
+    "type": "string",
+    "description": "可选的 Komari API Token",
+    "hint": "Token 只用于请求头 Authorization: Bearer，不会写入日志或示例。",
+    "default": ""
+  },
+  "notification_enabled": {
+    "type": "bool",
+    "description": "启用节点上下线提醒",
+    "default": true
+  },
+  "notification_targets": {
+    "type": "list",
+    "description": "提醒目标会话（UMO，每行一个）",
+    "hint": "请使用 AstrBot 的 unified_msg_origin 格式。",
+    "default": []
+  },
+  "poll_interval": {
+    "type": "int",
+    "description": "后台轮询间隔（秒）",
+    "default": 120,
+    "hint": "最小 30 秒。"
+  },
+  "cache_ttl": {
+    "type": "int",
+    "description": "状态图片内存缓存时间（秒）",
+    "default": 30
+  }
+}

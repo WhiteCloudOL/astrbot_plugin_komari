@@ -1,0 +1,8 @@
+name: astrbot_plugin_komari
+display_name: Komari 监控
+desc: Komari 节点状态图片查询与上下线提醒
+version: v1.0.0
+author: 清蒸云鸭
+license: AGPL-3.0
+repo: https://github.com/WhiteCloudOL/astrbot_plugin_komari
+astrbot_version: ">=4.0.0"
