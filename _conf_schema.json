@@ -1,35 +1,116 @@
 {
-  "base_url": {
-    "type": "string",
-    "description": "Komari 站点地址（不带末尾斜杠）",
-    "default": ""
+  "connection": {
+    "type": "object",
+    "description": "站点连接",
+    "default": {},
+    "items": {
+      "base_url": {
+        "type": "string",
+        "description": "Komari 站点地址",
+        "hint": "例如 https://monitor.example.com，不要填写末尾斜杠。",
+        "default": ""
+      },
+      "api_token": {
+        "type": "string",
+        "description": "Komari API Token（可选）",
+        "hint": "仅用于 Authorization 请求头，不会写入日志或示例。",
+        "default": ""
+      }
+    }
   },
-  "api_token": {
-    "type": "string",
-    "description": "可选的 Komari API Token",
-    "hint": "Token 只用于请求头 Authorization: Bearer，不会写入日志或示例。",
-    "default": ""
+  "delivery": {
+    "type": "object",
+    "description": "提醒会话",
+    "default": {},
+    "items": {
+      "notification_enabled": {
+        "type": "bool",
+        "description": "启用主动提醒与每日状态推送",
+        "default": true
+      },
+      "notification_targets": {
+        "type": "list",
+        "description": "提醒目标会话（UMO，每行一个）",
+        "hint": "所有异常提醒和每日状态推送共用此列表。",
+        "default": []
+      }
+    }
   },
-  "notification_enabled": {
-    "type": "bool",
-    "description": "启用节点上下线提醒",
-    "default": true
+  "alerts": {
+    "type": "object",
+    "description": "异常预警",
+    "default": {},
+    "items": {
+      "offline_alert_enabled": {
+        "type": "bool",
+        "description": "节点离线和恢复在线时发送图片提醒",
+        "default": true
+      },
+      "cpu_alert_enabled": {
+        "type": "bool",
+        "description": "启用 CPU 高占用图片提醒",
+        "default": false
+      },
+      "cpu_alert_threshold": {
+        "type": "float",
+        "description": "CPU 占用告警阈值（百分比）",
+        "default": 90.0,
+        "condition": {
+          "cpu_alert_enabled": true
+        }
+      },
+      "memory_alert_enabled": {
+        "type": "bool",
+        "description": "启用内存高占用图片提醒",
+        "default": false
+      },
+      "memory_alert_threshold": {
+        "type": "float",
+        "description": "内存占用告警阈值（百分比）",
+        "default": 90.0,
+        "condition": {
+          "memory_alert_enabled": true
+        }
+      }
+    }
   },
-  "notification_targets": {
-    "type": "list",
-    "description": "提醒目标会话（UMO，每行一个）",
-    "hint": "请使用 AstrBot 的 unified_msg_origin 格式。",
-    "default": []
+  "daily_report": {
+    "type": "object",
+    "description": "每日状态推送",
+    "default": {},
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "每天推送一次所有节点状态图",
+        "default": false
+      },
+      "time": {
+        "type": "string",
+        "description": "推送时间（AstrBot 所在系统的本地时间）",
+        "hint": "使用 24 小时制 HH:MM，例如 09:00。",
+        "default": "09:00",
+        "condition": {
+          "enabled": true
+        }
+      }
+    }
   },
-  "poll_interval": {
-    "type": "int",
-    "description": "后台轮询间隔（秒）",
-    "default": 120,
-    "hint": "最小 30 秒。"
-  },
-  "cache_ttl": {
-    "type": "int",
-    "description": "状态图片内存缓存时间（秒）",
-    "default": 30
+  "advanced": {
+    "type": "object",
+    "description": "检查与缓存",
+    "default": {},
+    "items": {
+      "poll_interval": {
+        "type": "int",
+        "description": "后台检查间隔（秒）",
+        "default": 120,
+        "hint": "最小 30 秒。"
+      },
+      "cache_ttl": {
+        "type": "int",
+        "description": "Komari 状态数据内存缓存时间（秒）",
+        "default": 30
+      }
+    }
   }
 }
