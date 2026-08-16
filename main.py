@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,9 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 
 from .core.client import KomariClient
-from .core.monitor import AlertPolicy, evaluate_alerts
+from .core.monitor import evaluate_alerts
 from .core.renderer import StatusRenderer
+from .core.settings import load_settings
 
 
 class KomariPlugin(Star):
@@ -22,47 +24,20 @@ class KomariPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self._migrate_flat_config()
-        connection = self._config_group("connection")
-        delivery = self._config_group("delivery")
-        alerts = self._config_group("alerts")
-        daily_report = self._config_group("daily_report")
-        advanced = self._config_group("advanced")
-        self.poll_interval = max(30, int(advanced.get("poll_interval", 120)))
-        self.targets = self._read_targets(delivery.get("notification_targets", []))
-        self.notify_enabled = bool(delivery.get("notification_enabled", True))
-        cpu_alert_threshold = max(
-            1.0, min(100.0, float(alerts.get("cpu_alert_threshold", 90)))
-        )
-        memory_alert_threshold = max(
-            1.0, min(100.0, float(alerts.get("memory_alert_threshold", 90)))
-        )
-        self.alert_policy = AlertPolicy(
-            offline_enabled=bool(alerts.get("offline_alert_enabled", True)),
-            cpu_enabled=bool(alerts.get("cpu_alert_enabled", False)),
-            cpu_alert=cpu_alert_threshold,
-            memory_enabled=bool(alerts.get("memory_alert_enabled", False)),
-            memory_alert=memory_alert_threshold,
-        )
-        self.daily_report_enabled = bool(daily_report.get("enabled", False))
-        daily_report_time = str(daily_report.get("time", "09:00")).strip()
-        try:
-            self.daily_report_time = datetime.strptime(
-                daily_report_time, "%H:%M"
-            ).time()
-        except ValueError:
-            logger.warning(
-                "Invalid Komari daily report time %r; using 09:00",
-                daily_report_time,
-            )
-            self.daily_report_time = datetime.strptime("09:00", "%H:%M").time()
+        settings = load_settings(config)
+        self.poll_interval = settings.poll_interval
+        self.targets = settings.targets
+        self.notify_enabled = settings.notify_enabled
+        self.alert_policy = settings.alert_policy
+        self.daily_report_enabled = settings.daily_report_enabled
+        self.daily_report_time = settings.daily_report_time
         self.plugin_data_dir = Path(StarTools.get_data_dir(self.name))
         self.plugin_data_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.plugin_data_dir / "monitor_state.json"
         self.client = KomariClient(
-            base_url=str(connection.get("base_url", "")),
-            api_token=str(connection.get("api_token", "")),
-            cache_ttl=int(advanced.get("cache_ttl", 30)),
+            base_url=settings.base_url,
+            api_token=settings.api_token,
+            cache_ttl=settings.cache_ttl,
         )
         self.renderer = StatusRenderer(self.plugin_data_dir)
         self._monitor_task: asyncio.Task[None] | None = None
@@ -72,7 +47,14 @@ class KomariPlugin(Star):
     async def initialize(self) -> None:
         """Start the background monitor after the plugin has loaded."""
         self._monitor_task = asyncio.create_task(self._monitor_loop())
-        logger.info("Komari monitor initialized")
+        if self.client.base_url:
+            logger.info(
+                "Komari monitor initialized: interval=%ss targets=%d",
+                self.poll_interval,
+                len(self.targets),
+            )
+        else:
+            logger.warning("Komari monitor initialized without a site URL")
 
     async def terminate(self) -> None:
         """Stop the background monitor and release its task."""
@@ -87,21 +69,36 @@ class KomariPlugin(Star):
     @filter.command("komari")
     async def show_status(self, event: AstrMessageEvent):
         """Render and return the current Komari status image."""
-        snapshot = await self.client.fetch_snapshot()
-        if snapshot is None:
-            yield event.plain_result(self._configuration_hint())
+        logger.debug("Komari status command received")
+        try:
+            snapshot = await self.client.fetch_snapshot()
+            if snapshot is None:
+                yield event.plain_result(self._configuration_hint())
+                return
+            image_path = await asyncio.to_thread(self.renderer.render, snapshot)
+        except (OSError, RuntimeError, ValueError):
+            logger.exception("Failed to render Komari status command image")
+            yield event.plain_result("Komari 状态图生成失败，请稍后重试并检查日志。")
             return
-        image_path = await asyncio.to_thread(self.renderer.render, snapshot)
+        except Exception:
+            logger.exception("Unexpected Komari status command error")
+            yield event.plain_result("Komari 状态查询发生异常，请稍后重试并检查日志。")
+            return
+        logger.debug("Komari status command rendered %d nodes", len(snapshot))
         yield event.image_result(image_path)
 
     async def _monitor_loop(self) -> None:
         """Poll Komari and send one notification per state transition."""
         while True:
             try:
+                logger.debug("Starting Komari monitor poll")
                 snapshot = await self.client.fetch_snapshot(force=True)
                 if snapshot is not None:
                     await self._check_alerts(snapshot)
                     await self._send_daily_report_if_due(snapshot)
+                    logger.debug(
+                        "Completed Komari monitor poll: nodes=%d", len(snapshot)
+                    )
             except asyncio.CancelledError:
                 raise
             except (OSError, RuntimeError) as exc:
@@ -127,34 +124,126 @@ class KomariPlugin(Star):
             resources_ready,
             self.alert_policy,
         )
+        pending_value = self._state.get("pending_alerts")
+        pending: list[dict[str, Any]] = []
+        pending_count = len(pending_value) if isinstance(pending_value, list) else 0
+        now = time.time()
+        if isinstance(pending_value, list):
+            for item in pending_value:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    created_at = float(item.get("created_at", 0))
+                except (TypeError, ValueError):
+                    continue
+                if now - created_at < 86400:
+                    pending.append(item)
+        if len(pending) < pending_count:
+            logger.debug(
+                "Discarded %d expired or malformed Komari alerts",
+                pending_count - len(pending),
+            )
+        if self.notify_enabled and self.targets:
+            for alert in alerts:
+                uuid = str(alert.node.get("uuid", "unknown"))
+                if any(
+                    item.get("uuid") == uuid and item.get("kind") == alert.kind
+                    for item in pending
+                ):
+                    continue
+                pending.append(
+                    {
+                        "id": f"{uuid}:{alert.kind}:{time.time_ns()}",
+                        "uuid": uuid,
+                        "node": alert.node,
+                        "kind": alert.kind,
+                        "value": alert.value,
+                        "threshold": alert.threshold,
+                        "created_at": now,
+                        "delivered_targets": [],
+                    }
+                )
+                logger.info(
+                    "Komari alert detected: kind=%s node=%s",
+                    alert.kind,
+                    str(alert.node.get("name", uuid)),
+                )
+        elif alerts:
+            logger.debug(
+                "Suppressed %d Komari alerts because delivery is disabled or empty",
+                len(alerts),
+            )
         self._state.update(
             {
                 "baseline_ready": True,
                 "nodes": current,
                 "resource_alerts": next_resources,
+                "pending_alerts": pending,
             }
         )
         self._baseline_ready = True
         self._save_state()
-        if self.notify_enabled and alerts and self.targets:
-            for alert in alerts:
+        await self._deliver_pending_alerts()
+
+    async def _deliver_pending_alerts(self) -> None:
+        """Retry pending alert images until every current target succeeds."""
+        pending = self._state.get("pending_alerts")
+        if not (
+            self.notify_enabled
+            and self.targets
+            and isinstance(pending, list)
+            and pending
+        ):
+            return
+        for item in list(pending):
+            node = item.get("node")
+            kind = item.get("kind")
+            if not isinstance(node, dict) or not isinstance(kind, str):
+                pending.remove(item)
+                logger.warning("Discarded malformed pending Komari alert")
+                self._save_state()
+                continue
+            delivered_value = item.get("delivered_targets")
+            delivered = (
+                {str(target) for target in delivered_value if target}
+                if isinstance(delivered_value, list)
+                else set()
+            )
+            pending_targets = [
+                target for target in self.targets if target not in delivered
+            ]
+            if not pending_targets:
+                pending.remove(item)
+                self._save_state()
+                continue
+            try:
+                image_path = await asyncio.to_thread(
+                    self.renderer.render_alert,
+                    node,
+                    kind,
+                    item.get("value"),
+                    item.get("threshold"),
+                )
+            except (OSError, RuntimeError, ValueError):
+                logger.exception("Failed to render pending Komari alert image")
+                continue
+            chain = MessageChain([Comp.Image.fromFileSystem(image_path)])
+            for target in pending_targets:
                 try:
-                    image_path = await asyncio.to_thread(
-                        self.renderer.render_alert,
-                        alert.node,
-                        alert.kind,
-                        alert.value,
-                        alert.threshold,
+                    await self.context.send_message(target, chain)
+                    delivered.add(target)
+                    item["delivered_targets"] = sorted(delivered)
+                    self._save_state()
+                    logger.info(
+                        "Delivered Komari alert: kind=%s target=%s",
+                        kind,
+                        target,
                     )
-                except (OSError, ValueError):
-                    logger.exception("Failed to render Komari alert image")
-                    continue
-                chain = MessageChain([Comp.Image.fromFileSystem(image_path)])
-                for target in self.targets:
-                    try:
-                        await self.context.send_message(target, chain)
-                    except Exception:
-                        logger.exception("Failed to send Komari alert image to target")
+                except Exception:
+                    logger.exception("Failed to send Komari alert image to target")
+            if all(target in delivered for target in self.targets):
+                pending.remove(item)
+                self._save_state()
 
     async def _send_daily_report_if_due(self, snapshot: list[dict[str, Any]]) -> None:
         """Send the all-node status card once after the configured local time."""
@@ -162,93 +251,57 @@ class KomariPlugin(Star):
             return
         now = datetime.now().astimezone()
         today = now.date().isoformat()
+        scheduled_time = self.daily_report_time.strftime("%H:%M")
+        if now.time().replace(tzinfo=None) < self.daily_report_time:
+            return
+        delivery_state = self._state.get("daily_report_delivery")
+        delivered: set[str] = set()
         if (
-            now.time().replace(tzinfo=None) < self.daily_report_time
-            or self._state.get("last_daily_report_date") == today
+            isinstance(delivery_state, dict)
+            and delivery_state.get("date") == today
+            and delivery_state.get("time") == scheduled_time
+            and isinstance(delivery_state.get("targets"), list)
         ):
+            delivered = {str(target) for target in delivery_state["targets"] if target}
+        pending_targets = [target for target in self.targets if target not in delivered]
+        if not pending_targets:
             return
         try:
             image_path = await asyncio.to_thread(self.renderer.render, snapshot)
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             logger.exception("Failed to render Komari daily report image")
             return
-        self._state["last_daily_report_date"] = today
-        self._save_state()
         chain = MessageChain([Comp.Image.fromFileSystem(image_path)])
-        for target in self.targets:
+        for target in pending_targets:
             try:
                 await self.context.send_message(target, chain)
+                logger.info("Sent Komari daily report to target=%s", target)
+                delivered.add(target)
+                self._state["daily_report_delivery"] = {
+                    "date": today,
+                    "time": scheduled_time,
+                    "targets": sorted(delivered),
+                }
+                if all(item in delivered for item in self.targets):
+                    self._state["last_daily_report_time"] = f"{today} {scheduled_time}"
+                    self._state.pop("last_daily_report_date", None)
+                self._save_state()
             except Exception:
                 logger.exception("Failed to send Komari daily report to target")
-
-    def _migrate_flat_config(self) -> None:
-        """Move v1.0 flat settings into the grouped v1.1 configuration."""
-        mappings = {
-            "connection": ("base_url", "api_token"),
-            "delivery": ("notification_enabled", "notification_targets"),
-            "alerts": (
-                "offline_alert_enabled",
-                "cpu_alert_enabled",
-                "cpu_alert_threshold",
-                "memory_alert_enabled",
-                "memory_alert_threshold",
-            ),
-            "daily_report": ("daily_report_enabled", "daily_report_time"),
-            "advanced": ("poll_interval", "cache_ttl"),
-        }
-        changed = False
-        for group_name, legacy_keys in mappings.items():
-            group = self.config.get(group_name)
-            if not isinstance(group, dict):
-                group = {}
-            group_changed = False
-            for key in legacy_keys:
-                if key not in self.config:
-                    continue
-                nested_key = {
-                    "daily_report_enabled": "enabled",
-                    "daily_report_time": "time",
-                }.get(key, key)
-                group[nested_key] = self.config.pop(key)
-                changed = True
-                group_changed = True
-            if group_changed:
-                self.config[group_name] = group
-        if changed:
-            self.config.save_config()
-            logger.info("Migrated Komari settings to grouped configuration")
-
-    def _config_group(self, name: str) -> dict[str, Any]:
-        """Return one configuration group with safe type handling.
-
-        Args:
-            name: Top-level configuration group name.
-
-        Returns:
-            Group mapping, or an empty mapping for invalid input.
-        """
-        value = self.config.get(name, {})
-        return value if isinstance(value, dict) else {}
-
-    @staticmethod
-    def _read_targets(value: Any) -> list[str]:
-        """Normalize list or newline-separated target configuration."""
-        if isinstance(value, str):
-            values = value.replace("，", "\n").splitlines()
-        elif isinstance(value, list):
-            values = value
-        else:
-            values = []
-        return list(
-            dict.fromkeys(str(item).strip() for item in values if str(item).strip())
-        )
 
     def _load_state(self) -> dict[str, Any]:
         """Load transition state while tolerating a missing or corrupt file."""
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            logger.debug("Komari monitor state does not exist yet")
+            return {}
+        except json.JSONDecodeError:
+            logger.warning("Komari monitor state is corrupt; rebuilding baseline")
+            return {}
+        except OSError:
+            logger.exception("Failed to read Komari monitor state; rebuilding baseline")
             return {}
 
     def _save_state(self) -> None:
@@ -258,7 +311,7 @@ class KomariPlugin(Star):
                 json.dumps(self._state, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        except OSError:
+        except (OSError, TypeError, ValueError):
             logger.exception("Failed to save Komari monitor state")
 
     @staticmethod

@@ -103,7 +103,7 @@
       "poll_interval": {
         "type": "int",
         "description": "后台检查间隔（秒）",
-        "default": 120,
+        "default": 30,
         "hint": "最小 30 秒。"
       },
       "cache_ttl": {

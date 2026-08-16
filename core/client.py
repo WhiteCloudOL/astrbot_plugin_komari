@@ -28,6 +28,7 @@ class KomariClient:
             A list of normalized node records, or None when the request fails.
         """
         if not self.base_url:
+            logger.debug("Skipping Komari request because the site URL is empty")
             return None
         now = time.monotonic()
         if (
@@ -35,6 +36,7 @@ class KomariClient:
             and self._snapshot_cache
             and now - self._snapshot_cache[0] < self.cache_ttl
         ):
+            logger.debug("Using cached Komari snapshot")
             return self._snapshot_cache[1]
         timeout = aiohttp.ClientTimeout(total=20)
         headers = {"Accept": "application/json"}
@@ -53,6 +55,8 @@ class KomariClient:
             asyncio.TimeoutError,
             OSError,
             RuntimeError,
+            TypeError,
+            ValueError,
         ) as exc:
             logger.warning("Komari API unavailable: %s", exc)
             return None
@@ -67,10 +71,14 @@ class KomariClient:
             if not uuid:
                 continue
             status = statuses.get(uuid) or {}
+            if not isinstance(status, dict):
+                logger.warning("Ignoring malformed Komari status for node %s", uuid)
+                status = {}
             record = {**node, **status, "uuid": uuid}
             record["online"] = bool(status.get("online", False))
             snapshot.append(record)
         self._snapshot_cache = (now, snapshot)
+        logger.debug("Fetched Komari snapshot: nodes=%d", len(snapshot))
         return snapshot
 
     async def _rpc_call(
@@ -84,6 +92,8 @@ class KomariClient:
         async with session.post(f"{self.base_url}/api/rpc2", json=payload) as response:
             response.raise_for_status()
             body = await response.json(content_type=None)
+        if not isinstance(body, dict):
+            raise RuntimeError("Komari API returned a non-object JSON-RPC response")
         if body.get("error"):
             raise RuntimeError(str(body["error"]))
         return body.get("result")
