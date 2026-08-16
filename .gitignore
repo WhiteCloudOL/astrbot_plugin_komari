@@ -1,5 +1,5 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-komari_status.png
+/komari_status.png
 monitor_state.json
