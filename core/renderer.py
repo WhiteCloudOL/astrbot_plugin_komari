@@ -26,18 +26,18 @@ class StatusRenderer:
         Returns:
             Absolute path to the generated PNG image.
         """
-        width = 1400
-        margin = 54
-        gap = 24
-        card_width = (width - margin * 2 - gap) // 2
-        card_height = 292
-        rows = max(1, math.ceil(len(snapshot) / 2))
-        height = 350 + rows * (card_height + gap) + 78
+        width = 1320
+        margin = 40
+        gap = 16
+        card_width = (width - margin * 2 - gap * 2) // 3
+        card_height = 404
+        rows = max(1, math.ceil(len(snapshot) / 3))
+        height = 224 + rows * (card_height + gap) + 56
         image = Image.new("RGB", (width, height), "#fff7fb")
         draw = ImageDraw.Draw(image)
         self._draw_background(draw, width, height)
         draw.text(
-            (margin, 56),
+            (margin, 48),
             "Komari · 节点巡航",
             font=self._font(42),
             fill="#3d294c",
@@ -45,45 +45,50 @@ class StatusRenderer:
         online = sum(bool(node.get("online")) for node in snapshot)
         offline = max(0, len(snapshot) - online)
         draw.text(
-            (margin, 116),
+            (margin, 106),
             f"清蒸云鸭的粉色监控舱  ·  {online} 在线 / {offline} 离线",
             font=self._font(20),
             fill="#84627f",
         )
         draw.rounded_rectangle(
-            (width - margin - 330, 58, width - margin, 174),
-            radius=28,
+            (width - margin - 296, 48, width - margin, 158),
+            radius=26,
             fill="#ffe2ee",
             outline="#f5b5cb",
             width=2,
         )
         draw.text(
-            (width - margin - 300, 79),
+            (width - margin - 268, 68),
             "巡航状态",
             font=self._font(18),
             fill="#9e6684",
         )
         draw.text(
-            (width - margin - 300, 106),
+            (width - margin - 268, 94),
             "稳定" if offline == 0 else "需要关注",
             font=self._font(30),
             fill="#e45d87" if offline else "#4caa83",
         )
-        draw.text((margin, 206), "NODES", font=self._font(16), fill="#d57e9e")
+        draw.text((margin, 182), "NODES", font=self._font(15), fill="#d57e9e")
         for index, node in enumerate(snapshot):
-            column = index % 2
-            row = index // 2
+            column = index % 3
+            row = index // 3
             x = margin + column * (card_width + gap)
-            y = 238 + row * (card_height + gap)
+            y = 206 + row * (card_height + gap)
             self._draw_node_card(draw, node, x, y, card_width, card_height)
         draw.text(
-            (margin, height - 48),
+            (margin, height - 40),
             "数据来自 Komari · 图片缓存由插件数据目录管理",
             font=self._font(16),
             fill="#a98ca8",
         )
         output_path = self._new_output_path("komari_status")
-        image.save(output_path, format="PNG", optimize=True)
+        image.quantize(colors=128, method=Image.Quantize.MEDIANCUT).save(
+            output_path,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
         self._cleanup_render_cache()
         return str(output_path)
 
@@ -214,13 +219,28 @@ class StatusRenderer:
 
         draw.text((margin, 612), "LIVE METRICS", font=self._font(15), fill="#d57e9e")
         metrics = [
-            ("CPU", self._percent(node.get("cpu"))),
-            ("RAM", self._ratio_percent(node.get("ram"), node.get("ram_total"))),
-            ("DISK", self._ratio_percent(node.get("disk"), node.get("disk_total"))),
-            ("SWAP", self._ratio_percent(node.get("swap"), node.get("swap_total"))),
+            ("CPU", self._percent(node.get("cpu")), ""),
+            (
+                "RAM",
+                self._ratio_percent(node.get("ram"), node.get("ram_total")),
+                f"{self._format_bytes(node.get('ram'))}/"
+                f"{self._format_bytes(node.get('ram_total'))}",
+            ),
+            (
+                "DISK",
+                self._ratio_percent(node.get("disk"), node.get("disk_total")),
+                f"{self._format_bytes(node.get('disk'))}/"
+                f"{self._format_bytes(node.get('disk_total'))}",
+            ),
+            (
+                "SWAP",
+                self._ratio_percent(node.get("swap"), node.get("swap_total")),
+                f"{self._format_bytes(node.get('swap'))}/"
+                f"{self._format_bytes(node.get('swap_total'))}",
+            ),
         ]
         metric_width = (width - margin * 2 - 24) // 2
-        for index, (label, metric_value) in enumerate(metrics):
+        for index, (label, percentage, detail) in enumerate(metrics):
             column = index % 2
             row = index // 2
             x = margin + column * (metric_width + 24)
@@ -235,9 +255,9 @@ class StatusRenderer:
             draw.text((x + 22, y + 18), label, font=self._font(15), fill="#a17fa2")
             draw.text(
                 (x + metric_width - 22, y + 17),
-                f"{metric_value:.1f}%",
+                f"{detail}  {percentage:.1f}%" if detail else f"{percentage:.1f}%",
                 font=self._font(18),
-                fill=accent if metric_value < 80 else "#e07e46",
+                fill=accent if percentage < 80 else "#e07e46",
                 anchor="ra",
             )
             bar_width = metric_width - 44
@@ -250,11 +270,11 @@ class StatusRenderer:
                 (
                     x + 22,
                     y + 56,
-                    x + 22 + int(bar_width * metric_value / 100),
+                    x + 22 + int(bar_width * percentage / 100),
                     y + 68,
                 ),
                 radius=6,
-                fill=accent if metric_value < 80 else "#ee9b52",
+                fill=accent if percentage < 80 else "#ee9b52",
             )
 
         draw.rounded_rectangle(
@@ -265,7 +285,9 @@ class StatusRenderer:
         online = bool(node.get("online"))
         uptime = self._format_uptime(node.get("uptime")) if online else "节点当前离线"
         network = (
-            f"累计流量 ↓ {self._format_bytes(node.get('net_total_down'))}  "
+            f"实时 ↓ {self._format_bytes(node.get('net_in'))}/s  "
+            f"↑ {self._format_bytes(node.get('net_out'))}/s   ·   "
+            f"累计 ↓ {self._format_bytes(node.get('net_total_down'))}  "
             f"↑ {self._format_bytes(node.get('net_total_up'))}"
         )
         draw.text((margin + 28, 911), uptime, font=self._font(18), fill="#684d6d")
@@ -289,7 +311,12 @@ class StatusRenderer:
             if char.isalnum() or char == "-"
         )[:48]
         output_path = self._new_output_path(f"komari_notice_{safe_uuid}_{alert_kind}")
-        image.save(output_path, format="PNG", optimize=True)
+        image.quantize(colors=128, method=Image.Quantize.MEDIANCUT).save(
+            output_path,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
         self._cleanup_render_cache()
         return str(output_path)
 
@@ -357,38 +384,62 @@ class StatusRenderer:
             outline="#f0dce8",
             width=2,
         )
-        draw.ellipse((x + 28, y + 32, x + 48, y + 52), fill=accent)
+        draw.ellipse((x + 24, y + 29, x + 42, y + 47), fill=accent)
         draw.text(
-            (x + 62, y + 25),
-            self._fit_text(str(node.get("name", "未命名节点")), width - 100, 24),
-            font=self._font(24),
+            (x + 54, y + 20),
+            self._fit_text(str(node.get("name", "未命名节点")), width - 84, 23),
+            font=self._font(23),
             fill="#432d4f",
         )
         meta = self._fit_text(
             f"{self._region_label(node.get('region'))}  "
             f"{node.get('os', '未知系统')}  {node.get('arch', '')}",
-            width - 56,
-            16,
+            width - 48,
+            15,
         )
-        draw.text((x + 28, y + 70), meta, font=self._font(16), fill="#987d9b")
+        draw.text((x + 24, y + 60), meta, font=self._font(15), fill="#987d9b")
         draw.line(
-            (x + 28, y + 104, x + width - 28, y + 104),
+            (x + 24, y + 90, x + width - 24, y + 90),
             fill="#f3e8f0",
             width=2,
         )
         metrics = [
-            ("CPU", self._percent(node.get("cpu"))),
-            ("RAM", self._ratio_percent(node.get("ram"), node.get("ram_total"))),
-            ("DISK", self._ratio_percent(node.get("disk"), node.get("disk_total"))),
-            ("SWAP", self._ratio_percent(node.get("swap"), node.get("swap_total"))),
+            ("CPU", self._percent(node.get("cpu")), ""),
+            (
+                "RAM",
+                self._ratio_percent(node.get("ram"), node.get("ram_total")),
+                f"{self._format_bytes(node.get('ram'))}/"
+                f"{self._format_bytes(node.get('ram_total'))}",
+            ),
+            (
+                "DISK",
+                self._ratio_percent(node.get("disk"), node.get("disk_total")),
+                f"{self._format_bytes(node.get('disk'))}/"
+                f"{self._format_bytes(node.get('disk_total'))}",
+            ),
+            (
+                "SWAP",
+                self._ratio_percent(node.get("swap"), node.get("swap_total")),
+                f"{self._format_bytes(node.get('swap'))}/"
+                f"{self._format_bytes(node.get('swap_total'))}",
+            ),
         ]
-        metric_width = (width - 84) // 2
-        for index, (label, value) in enumerate(metrics):
+        metric_gap = 20
+        metric_width = (width - 48 - metric_gap) // 2
+        for index, (label, value, detail) in enumerate(metrics):
             column = index % 2
             row = index // 2
-            mx = x + 28 + column * (metric_width + 28)
-            my = y + 124 + row * 66
+            mx = x + 24 + column * (metric_width + metric_gap)
+            my = y + 108 + row * 72
             draw.text((mx, my), label, font=self._font(15), fill="#ad8cae")
+            value_text = f"{detail}  {value:.1f}%" if detail else f"{value:.1f}%"
+            draw.text(
+                (mx + metric_width, my),
+                self._fit_text(value_text, metric_width - 42, 13),
+                font=self._font(13),
+                fill=accent if value < 80 else "#d98540",
+                anchor="ra",
+            )
             draw.rounded_rectangle(
                 (mx, my + 28, mx + metric_width, my + 40),
                 radius=6,
@@ -399,17 +450,43 @@ class StatusRenderer:
                 radius=6,
                 fill=accent if value < 80 else "#f1ae4b",
             )
-            draw.text(
-                (mx + metric_width - 64, my),
-                f"{value:.1f}%",
-                font=self._font(15),
-                fill=accent,
-            )
+        network_top = y + 258
+        draw.rounded_rectangle(
+            (x + 24, network_top, x + width - 24, network_top + 92),
+            radius=18,
+            fill="#fbf2f8",
+        )
+        draw.text(
+            (x + 42, network_top + 12),
+            "NETWORK",
+            font=self._font(13),
+            fill="#b07b9d",
+        )
+        live_network = (
+            f"实时  ↓ {self._format_bytes(node.get('net_in'))}/s    "
+            f"↑ {self._format_bytes(node.get('net_out'))}/s"
+        )
+        total_network = (
+            f"累计  ↓ {self._format_bytes(node.get('net_total_down'))}    "
+            f"↑ {self._format_bytes(node.get('net_total_up'))}"
+        )
+        draw.text(
+            (x + 42, network_top + 37),
+            self._fit_text(live_network, width - 84, 14),
+            font=self._font(14),
+            fill="#6f526f",
+        )
+        draw.text(
+            (x + 42, network_top + 62),
+            self._fit_text(total_network, width - 84, 14),
+            font=self._font(14),
+            fill="#907390",
+        )
         uptime = self._format_uptime(node.get("uptime")) if online else "等待节点恢复"
         draw.text(
-            (x + 28, y + height - 38),
-            self._fit_text(uptime, width - 56, 15),
-            font=self._font(15),
+            (x + 24, y + height - 34),
+            self._fit_text(uptime, width - 48, 14),
+            font=self._font(14),
             fill="#9b819d",
         )
 
@@ -497,8 +574,9 @@ class StatusRenderer:
             amount = max(0.0, float(value or 0))
         except (TypeError, ValueError):
             amount = 0.0
-        for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-            if amount < 1024 or unit == "PiB":
-                return f"{amount:.1f} {unit}"
+        for unit in ("B", "K", "M", "G", "T", "P"):
+            if amount < 1024 or unit == "P":
+                precision = 0 if amount >= 100 or amount.is_integer() else 1
+                return f"{amount:.{precision}f}{unit}"
             amount /= 1024
         return "0 B"
