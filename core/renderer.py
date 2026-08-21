@@ -26,12 +26,13 @@ class StatusRenderer:
         Returns:
             Absolute path to the generated PNG image.
         """
-        width = 1320
+        width = 1680
         margin = 40
         gap = 16
-        card_width = (width - margin * 2 - gap * 2) // 3
-        card_height = 404
-        rows = max(1, math.ceil(len(snapshot) / 3))
+        columns = 3
+        card_width = (width - margin * 2 - gap * (columns - 1)) // columns
+        card_height = 350
+        rows = max(1, math.ceil(len(snapshot) / columns))
         height = 224 + rows * (card_height + gap) + 56
         image = Image.new("RGB", (width, height), "#fff7fb")
         draw = ImageDraw.Draw(image)
@@ -71,8 +72,8 @@ class StatusRenderer:
         )
         draw.text((margin, 182), "NODES", font=self._font(15), fill="#d57e9e")
         for index, node in enumerate(snapshot):
-            column = index % 3
-            row = index // 3
+            column = index % columns
+            row = index // columns
             x = margin + column * (card_width + gap)
             y = 206 + row * (card_height + gap)
             self._draw_node_card(draw, node, x, y, card_width, card_height)
@@ -278,7 +279,7 @@ class StatusRenderer:
             )
 
         draw.rounded_rectangle(
-            (margin, 886, width - margin, 1026),
+            (margin, 870, width - margin, 1026),
             radius=26,
             fill="#f8edf5",
         )
@@ -290,10 +291,25 @@ class StatusRenderer:
             f"累计 ↓ {self._format_bytes(node.get('net_total_down'))}  "
             f"↑ {self._format_bytes(node.get('net_total_up'))}"
         )
-        draw.text((margin + 28, 911), uptime, font=self._font(18), fill="#684d6d")
-        draw.text((margin + 28, 951), network, font=self._font(16), fill="#8f7191")
+        system_details = (
+            f"负载 {self._number(node.get('load')):.2f} / "
+            f"{self._number(node.get('load5')):.2f} / "
+            f"{self._number(node.get('load15')):.2f}   ·   "
+            f"温度 {self._number(node.get('temp')):.1f}°C   ·   "
+            f"进程 {int(self._number(node.get('process')))}   ·   "
+            f"连接 TCP {int(self._number(node.get('connections')))} / "
+            f"UDP {int(self._number(node.get('connections_udp')))}"
+        )
+        draw.text((margin + 28, 893), uptime, font=self._font(18), fill="#684d6d")
+        draw.text((margin + 28, 928), network, font=self._font(16), fill="#8f7191")
         draw.text(
-            (margin + 28, 986),
+            (margin + 28, 963),
+            self._fit_text(system_details, width - margin * 2 - 56, 15),
+            font=self._font(15),
+            fill="#8f7191",
+        )
+        draw.text(
+            (margin + 28, 996),
             f"采样时间  {timestamp}",
             font=self._font(15),
             fill="#a58ba5",
@@ -424,7 +440,7 @@ class StatusRenderer:
                 f"{self._format_bytes(node.get('swap_total'))}",
             ),
         ]
-        metric_gap = 20
+        metric_gap = 24
         metric_width = (width - 48 - metric_gap) // 2
         for index, (label, value, detail) in enumerate(metrics):
             column = index % 2
@@ -432,11 +448,11 @@ class StatusRenderer:
             mx = x + 24 + column * (metric_width + metric_gap)
             my = y + 108 + row * 72
             draw.text((mx, my), label, font=self._font(15), fill="#ad8cae")
-            value_text = f"{detail}  {value:.1f}%" if detail else f"{value:.1f}%"
+            value_text = f"{detail}  ·  {value:.1f}%" if detail else f"{value:.1f}%"
             draw.text(
                 (mx + metric_width, my),
-                self._fit_text(value_text, metric_width - 42, 13),
-                font=self._font(13),
+                value_text,
+                font=self._font(14),
                 fill=accent if value < 80 else "#d98540",
                 anchor="ra",
             )
@@ -450,9 +466,9 @@ class StatusRenderer:
                 radius=6,
                 fill=accent if value < 80 else "#f1ae4b",
             )
-        network_top = y + 258
+        network_top = y + 232
         draw.rounded_rectangle(
-            (x + 24, network_top, x + width - 24, network_top + 92),
+            (x + 24, network_top, x + width - 24, network_top + 72),
             radius=18,
             fill="#fbf2f8",
         )
@@ -471,13 +487,13 @@ class StatusRenderer:
             f"↑ {self._format_bytes(node.get('net_total_up'))}"
         )
         draw.text(
-            (x + 42, network_top + 37),
-            self._fit_text(live_network, width - 84, 14),
+            (x + 148, network_top + 11),
+            self._fit_text(live_network, width - 190, 14),
             font=self._font(14),
             fill="#6f526f",
         )
         draw.text(
-            (x + 42, network_top + 62),
+            (x + 42, network_top + 42),
             self._fit_text(total_network, width - 84, 14),
             font=self._font(14),
             fill="#907390",
@@ -532,6 +548,21 @@ class StatusRenderer:
         """Normalize a percentage-like metric into the 0..100 range."""
         try:
             return max(0.0, min(100.0, float(value or 0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _number(value: Any) -> float:
+        """Normalize a non-negative numeric metric.
+
+        Args:
+            value: Metric value received from Komari.
+
+        Returns:
+            A non-negative float, or zero for invalid input.
+        """
+        try:
+            return max(0.0, float(value or 0))
         except (TypeError, ValueError):
             return 0.0
 
